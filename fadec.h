@@ -49,11 +49,12 @@ typedef enum {
     FD_OT_IMM = 2,
     FD_OT_MEM = 3,
     FD_OT_OFF = 4,
+    FD_OT_MEMBCST = 5,
 } FdOpType;
 
 typedef enum {
-    /** Register type is encoded in mnemonic **/
-    FD_RT_IMP = 0,
+    /** Vector (SSE/AVX) register XMMn/YMMn/ZMMn **/
+    FD_RT_VEC = 0,
     /** Low general purpose register **/
     FD_RT_GPL = 1,
     /** High-byte general purpose register **/
@@ -64,8 +65,6 @@ typedef enum {
     FD_RT_FPU = 4,
     /** MMX register MMn **/
     FD_RT_MMX = 5,
-    /** Vector (SSE/AVX) register XMMn/YMMn/ZMMn **/
-    FD_RT_VEC = 6,
     /** Vector mask (AVX-512) register Kn **/
     FD_RT_MASK = 7,
     /** Bound register BNDn **/
@@ -77,6 +76,22 @@ typedef enum {
     /** Must be a memory operand **/
     FD_RT_MEM = 15,
 } FdRegType;
+
+/** Do not depend on the actual enum values. **/
+typedef enum {
+    /** Round to nearest (even) **/
+    FD_RC_RN = 1,
+    /** Round down **/
+    FD_RC_RD = 3,
+    /** Round up **/
+    FD_RC_RU = 5,
+    /** Round to zero (truncate) **/
+    FD_RC_RZ = 7,
+    /** Rounding mode as specified in MXCSR **/
+    FD_RC_MXCSR = 0,
+    /** Rounding mode irrelevant, but SAE **/
+    FD_RC_SAE = 6,
+} FdRoundControl;
 
 /** Internal use only. **/
 typedef struct {
@@ -94,7 +109,7 @@ typedef struct {
     uint8_t addrsz;
     uint8_t operandsz;
     uint8_t size;
-    uint8_t _pad0;
+    uint8_t evex;
 
     FdOp operands[4];
 
@@ -175,12 +190,17 @@ const char* fdi_name(FdInstrType ty);
 /** Gets the size of the instruction in bytes. **/
 #define FD_SIZE(instr) ((instr)->size)
 /** Gets the specified segment override, or FD_REG_NONE for default segment. **/
-#define FD_SEGMENT(instr) ((FdReg) (instr)->segment)
+#define FD_SEGMENT(instr) ((FdReg) (instr)->segment & 0x3f)
 /** Gets the address size attribute of the instruction in bytes. **/
-#define FD_ADDRSIZE(instr) ((instr)->addrsz)
+#define FD_ADDRSIZE(instr) (1 << (instr)->addrsz)
+/** Get the logarithmic address size; FD_ADDRSIZE == 1 << FD_ADDRSIZELG **/
+#define FD_ADDRSIZELG(instr) ((instr)->addrsz)
 /** Gets the operation width in bytes of the instruction if this is not encoded
  * in the operands, for example for the string instruction (e.g. MOVS). **/
-#define FD_OPSIZE(instr) ((instr)->operandsz)
+#define FD_OPSIZE(instr) (1 << (instr)->operandsz)
+/** Get the logarithmic operand size; FD_OPSIZE == 1 << FD_OPSIZELG iff
+ * FD_OPSIZE is valid. **/
+#define FD_OPSIZELG(instr) ((instr)->operandsz)
 /** Indicates whether the instruction was encoded with a REP prefix. Needed for:
  * (1) Handling the instructions MOVS, STOS, LODS, INS and OUTS properly.
  * (2) Handling the instructions SCAS and CMPS, for which this means REPZ. **/
@@ -201,7 +221,12 @@ const char* fdi_name(FdInstrType ty);
  *     actually needed operand size (that is, an instruction may/must only use
  *     a smaller part than specified here). The real operand size is always
  *     fully recoverable in combination with the instruction type. **/
-#define FD_OP_SIZE(instr,idx) ((instr)->operands[idx].size)
+#define FD_OP_SIZE(instr,idx) (1 << (instr)->operands[idx].size >> 1)
+/** Get the logarithmic size of an operand; see FD_OP_SIZE for special cases.
+ * The following equality holds:  FD_OP_SIZE == 1 << (FD_OP_SIZELG + 1) >> 1
+ * Note that typically  FD_OP_SIZE == 1 << FD_OP_SIZELG  unless a zero-sized
+ * memory operand, FPU register, or mask register is involved.  **/
+#define FD_OP_SIZELG(instr,idx) ((instr)->operands[idx].size - 1)
 /** Gets the accessed register index of a register operand. Note that /only/ the
  * index is returned, no further interpretation of the index (which depends on
  * the instruction type) is done. The register type can be fetched using
@@ -220,24 +245,37 @@ const char* fdi_name(FdInstrType ty);
  * if the memory operand has no base register. This is the only case where the
  * 64-bit register RIP can be returned, in which case the operand also has no
  * scaled index register.
- * Only valid if  FD_OP_TYPE == FD_OT_MEM  **/
+ * Only valid if  FD_OP_TYPE == FD_OT_MEM/MEMBCST  **/
 #define FD_OP_BASE(instr,idx) ((FdReg) (instr)->operands[idx].reg)
 /** Gets the index of the index register from a memory operand, or FD_REG_NONE,
  * if the memory operand has no scaled index register.
- * Only valid if  FD_OP_TYPE == FD_OT_MEM  **/
+ * Only valid if  FD_OP_TYPE == FD_OT_MEM/MEMBCST  **/
 #define FD_OP_INDEX(instr,idx) ((FdReg) (instr)->operands[idx].misc & 0x3f)
 /** Gets the scale of the index register from a memory operand when existent.
  * This does /not/ return the scale in an absolute value but returns the amount
  * of bits the index register is shifted to the left (i.e. the value in in the
  * range 0-3). The actual scale can be computed easily using  1<<FD_OP_SCALE.
- * Only valid if  FD_OP_TYPE == FD_OT_MEM  and  FD_OP_INDEX != FD_REG_NONE **/
+ * Only valid if  FD_OP_TYPE == FD_OT_MEM/MEMBCST  and  FD_OP_INDEX != NONE **/
 #define FD_OP_SCALE(instr,idx) ((instr)->operands[idx].misc >> 6)
 /** Gets the sign-extended displacement of a memory operand.
- * Only valid if  FD_OP_TYPE == FD_OT_MEM  **/
+ * Only valid if  FD_OP_TYPE == FD_OT_MEM/MEMBCST  **/
 #define FD_OP_DISP(instr,idx) ((int64_t) (instr)->disp)
+/** Get memory broadcast size in bytes.
+ * Only valid if  FD_OP_TYPE == FD_OT_MEMBCST **/
+#define FD_OP_BCSTSZ(instr,idx) (1 << FD_OP_BCSTSZLG(instr,idx))
+/** Get logarithmic memory broadcast size (1 = 2-byte; 2=4-byte; 3=8-byte).
+ * Only valid if  FD_OP_TYPE == FD_OT_MEMBCST **/
+#define FD_OP_BCSTSZLG(instr,idx) ((instr)->segment >> 6)
 /** Gets the (sign-extended) encoded constant for an immediate operand.
  * Only valid if  FD_OP_TYPE == FD_OT_IMM  or  FD_OP_TYPE == FD_OT_OFF  **/
 #define FD_OP_IMM(instr,idx) ((instr)->imm)
+
+/** Get the opmask register for EVEX-encoded instructions; 0 for no mask. **/
+#define FD_MASKREG(instr) ((instr)->evex & 0x07)
+/** Get whether zero masking shall be used. Only valid if  FD_MASKREG != 0. **/
+#define FD_MASKZERO(instr) ((instr)->evex & 0x80)
+/** Get rounding mode for EVEX-encoded instructions. See FdRoundControl. **/
+#define FD_ROUNDCONTROL(instr) ((FdRoundControl) (((instr)->evex & 0x70) >> 4))
 
 #ifdef __cplusplus
 }

@@ -2,12 +2,24 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
 
 #include <fadec.h>
 
 
+#ifdef __GNUC__
 #define LIKELY(x) __builtin_expect((x), 1)
 #define UNLIKELY(x) __builtin_expect((x), 0)
+#define DECLARE_ARRAY_SIZE(n) static n
+#define DECLARE_RESTRICTED_ARRAY_SIZE(n) restrict static n
+#else
+#define LIKELY(x) (x)
+#define UNLIKELY(x) (x)
+#define DECLARE_ARRAY_SIZE(n) n
+#define DECLARE_RESTRICTED_ARRAY_SIZE(n) n
+#endif
 
 struct FdStr {
     const char* s;
@@ -17,17 +29,12 @@ struct FdStr {
 #define fd_stre(s) ((struct FdStr) { (s "\0\0\0\0\0\0\0\0\0\0"), sizeof (s)-1 })
 
 static char*
-fd_strplcpy(char* restrict dst, const char* src, size_t size) {
-    while (*src && size > 1)
-        *dst++ = *src++, size--;
-    if (size)
-        *dst = 0;
-    return dst;
-}
-
-static char*
 fd_strpcat(char* restrict dst, struct FdStr src) {
+#ifdef __GNUC__
     unsigned lim = __builtin_constant_p(src.sz) && src.sz <= 8 ? 8 : 16;
+#else
+    unsigned lim = 16;
+#endif
     for (unsigned i = 0; i < lim; i++)
         dst[i] = src.s[i];
     // __builtin_memcpy(dst, src.s, 16);
@@ -36,7 +43,30 @@ fd_strpcat(char* restrict dst, struct FdStr src) {
 
 static unsigned
 fd_clz64(uint64_t v) {
+#if defined(__GNUC__)
+#if INTPTR_MAX == INT64_MAX
     return __builtin_clzl(v);
+#else
+    if (v <= 0xffffffff)
+        return 32 + __builtin_clzl(v);
+    return __builtin_clzl(v >> 32);
+#endif
+#elif defined(_MSC_VER)
+    unsigned long index;
+
+#if INTPTR_MAX == INT64_MAX
+    _BitScanReverse64(&index, v);
+#else
+    if (_BitScanReverse(&index, v >> 32))
+        return 31 - index;
+
+    _BitScanReverse(&index, v & 0xffffffff);
+#endif
+
+    return 63 - index;
+#else
+#error Unsupported compiler.
+#endif
 }
 
 #if defined(__SSE2__)
@@ -44,7 +74,7 @@ fd_clz64(uint64_t v) {
 #endif
 
 static char*
-fd_strpcatnum(char dst[], uint64_t val) {
+fd_strpcatnum(char dst[DECLARE_ARRAY_SIZE(18)], uint64_t val) {
     unsigned lz = fd_clz64(val|1);
     unsigned numbytes = 16 - (lz / 4);
 #if defined(__SSE2__)
@@ -73,7 +103,7 @@ fd_strpcatnum(char dst[], uint64_t val) {
 }
 
 static char*
-fd_strpcatreg(char* restrict dst, unsigned rt, unsigned ri, unsigned size) {
+fd_strpcatreg(char* restrict dst, size_t rt, size_t ri, unsigned size) {
     const char* nametab =
         "\2al\4bnd0\2cl\4bnd1\2dl\4bnd2\2bl\4bnd3"
         "\3spl\0   \3bpl\0   \3sil\0   \3dil\0   "
@@ -90,38 +120,43 @@ fd_strpcatreg(char* restrict dst, unsigned rt, unsigned ri, unsigned size) {
         "\3r8d \2k0\3r9d \2k1\4r10d\2k2\4r11d\2k3"
         "\4r12d\2k4\4r13d\2k5\4r14d\2k6\4r15d\2k7\3eip\0   "
 
-        "\4xmm0\0  \4xmm1\0  \4xmm2\0  \4xmm3\0  "
-        "\4xmm4\0  \4xmm5\0  \4xmm6\0  \4xmm7\0  "
-        "\4xmm8\0  \4xmm9\0  \5xmm10\0 \5xmm11\0 "
-        "\5xmm12\0 \5xmm13\0 \5xmm14\0 \5xmm15\0 \0\0      "
-
         "\3rax\3cr0\3rcx\0   \3rdx\3cr2\3rbx\3cr3"
         "\3rsp\3cr4\3rbp\0   \3rsi\0   \3rdi\0   "
         "\2r8 \3cr8\2r9 \3dr0\3r10\3dr1\3r11\3dr2"
         "\3r12\3dr3\3r13\3dr4\3r14\3dr5\3r15\3dr6\3rip\3dr7"
 
         "\5st(0)\0 \5st(1)\0 \5st(2)\0 \5st(3)\0 "
-        "\5st(4)\0 \5st(5)\0 \5st(6)\0 \5st(7)\0 ";
+        "\5st(4)\0 \5st(5)\0 \5st(6)\0 \5st(7)\0 "
+
+        "\4xmm0\0  \4xmm1\0  \4xmm2\0  \4xmm3\0  "
+        "\4xmm4\0  \4xmm5\0  \4xmm6\0  \4xmm7\0  "
+        "\4xmm8\0  \4xmm9\0  \5xmm10\0 \5xmm11\0 "
+        "\5xmm12\0 \5xmm13\0 \5xmm14\0 \5xmm15\0 "
+        "\5xmm16\0 \5xmm17\0 \5xmm18\0 \5xmm19\0 "
+        "\5xmm20\0 \5xmm21\0 \5xmm22\0 \5xmm23\0 "
+        "\5xmm24\0 \5xmm25\0 \5xmm26\0 \5xmm27\0 "
+        "\5xmm28\0 \5xmm29\0 \5xmm30\0 \5xmm31\0 ";
 
     static const uint16_t nametabidx[] = {
-        [FD_RT_GPL] = 0 * 17*8 + 0 * 8 + 0, // 1 * 17*8, 2 * 17*8, 4 * 17*8
+        [FD_RT_GPL] = 0 * 17*8 + 0 * 8 + 0,
         [FD_RT_GPH] = 0 * 17*8 + 8 * 8 + 5,
         [FD_RT_SEG] = 1 * 17*8 + 8 * 8 + 5,
-        [FD_RT_FPU] = 5 * 17*8 + 0 * 8 + 0,
+        [FD_RT_FPU] = 4 * 17*8 + 0 * 8 + 0,
         [FD_RT_MMX] = 2 * 17*8 + 0 * 8 + 4,
-        [FD_RT_VEC] = 3 * 17*8 + 0 * 8 + 0,
+        [FD_RT_VEC] = 4 * 17*8 + 8 * 8 + 0,
         [FD_RT_MASK]= 2 * 17*8 + 8 * 8 + 5,
         [FD_RT_BND] = 0 * 17*8 + 0 * 8 + 3,
-        [FD_RT_CR]  = 4 * 17*8 + 0 * 8 + 4,
-        [FD_RT_DR]  = 4 * 17*8 + 9 * 8 + 4,
+        [FD_RT_CR]  = 3 * 17*8 + 0 * 8 + 4,
+        [FD_RT_DR]  = 3 * 17*8 + 9 * 8 + 4,
         // [FD_RT_TMM] = 1 * 17*8 + 0 * 8 + 3,
     };
-    unsigned idx = nametabidx[rt] + (rt == FD_RT_GPL ? (size >> 1) * 17*8 : 0);
+
+    unsigned idx = rt == FD_RT_GPL ? size * 17*8 : nametabidx[rt];
     const char* name = nametab + idx + 8*ri;
     for (unsigned i = 0; i < 8; i++)
         dst[i] = name[i+1];
-    if (UNLIKELY(rt == FD_RT_VEC))
-        dst[0] += size >> 5;
+    if (UNLIKELY(rt == FD_RT_VEC && size > 4))
+        dst[0] += size - 4;
     return dst + *name;
 }
 
@@ -132,7 +167,7 @@ fdi_name(FdInstrType ty) {
 }
 
 static char*
-fd_mnemonic(char buf[], const FdInstr* instr) {
+fd_mnemonic(char buf[DECLARE_RESTRICTED_ARRAY_SIZE(48)], const FdInstr* instr) {
 #define FD_DECODE_TABLE_STRTAB1
     static const char* mnemonic_str =
 #include <fadec-decode-private.inc>
@@ -160,7 +195,7 @@ fd_mnemonic(char buf[], const FdInstr* instr) {
     char sizesuffix[4] = {0};
     unsigned sizesuffixlen = 0;
 
-    if (UNLIKELY(FD_OP_TYPE(instr, 0) == FD_OT_OFF && FD_OP_SIZE(instr, 0) == 2))
+    if (UNLIKELY(FD_OP_TYPE(instr, 0) == FD_OT_OFF && FD_OP_SIZELG(instr, 0) == 1))
         sizesuffix[0] = 'w', sizesuffixlen = 1;
 
     switch (UNLIKELY(FD_TYPE(instr))) {
@@ -173,22 +208,22 @@ fd_mnemonic(char buf[], const FdInstr* instr) {
         mnemlen = FD_OPSIZE(instr) < 4 ? 3 : 4;
         break;
     case FDI_CMPXCHGD:
-        switch (FD_OPSIZE(instr)) {
+        switch (FD_OPSIZELG(instr)) {
         default: break;
-        case 4: sizesuffix[0] = '8', sizesuffix[1] = 'b', sizesuffixlen = 2; break;
-        case 8: sizesuffix[0] = '1', sizesuffix[1] = '6', sizesuffix[2] = 'b', sizesuffixlen = 3; break;
+        case 2: sizesuffix[0] = '8', sizesuffix[1] = 'b', sizesuffixlen = 2; break;
+        case 3: sizesuffix[0] = '1', sizesuffix[1] = '6', sizesuffix[2] = 'b', sizesuffixlen = 3; break;
         }
         break;
     case FDI_JCXZ:
-        mnemlen = FD_ADDRSIZE(instr) < 4 ? 4 : 5;
-        mnem += 5 * (FD_ADDRSIZE(instr) >> 2);
+        mnemlen = FD_ADDRSIZELG(instr) == 1 ? 4 : 5;
+        mnem += 5 * (FD_ADDRSIZELG(instr) - 1);
         break;
     case FDI_PUSH:
-        if (FD_OP_SIZE(instr, 0) == 2 && FD_OP_TYPE(instr, 0) == FD_OT_IMM)
+        if (FD_OP_SIZELG(instr, 0) == 1 && FD_OP_TYPE(instr, 0) == FD_OT_IMM)
             sizesuffix[0] = 'w', sizesuffixlen = 1;
         // FALLTHROUGH
     case FDI_POP:
-        if (FD_OP_SIZE(instr, 0) == 2 && FD_OP_TYPE(instr, 0) == FD_OT_REG &&
+        if (FD_OP_SIZELG(instr, 0) == 1 && FD_OP_TYPE(instr, 0) == FD_OT_REG &&
             FD_OP_REG_TYPE(instr, 0) == FD_RT_SEG)
             sizesuffix[0] = 'w', sizesuffixlen = 1;
         break;
@@ -210,13 +245,27 @@ fd_mnemonic(char buf[], const FdInstr* instr) {
     case FDI_XSAVES:
     case FDI_XRSTOR:
     case FDI_XRSTORS:
-        if (FD_OPSIZE(instr) == 8)
+        if (FD_OPSIZELG(instr) == 3)
             sizesuffix[0] = '6', sizesuffix[1] = '4', sizesuffixlen = 2;
+        break;
+    case FDI_EVX_MOV_G2X:
+    case FDI_EVX_MOV_X2G:
+    case FDI_EVX_PEXTR:
+        sizesuffix[0] = "bwdq"[FD_OP_SIZELG(instr, 0)];
+        sizesuffixlen = 1;
+        break;
+    case FDI_EVX_PBROADCAST:
+        sizesuffix[0] = "bwdq"[FD_OP_SIZELG(instr, 1)];
+        sizesuffixlen = 1;
+        break;
+    case FDI_EVX_PINSR:
+        sizesuffix[0] = "bwdq"[FD_OP_SIZELG(instr, 2)];
+        sizesuffixlen = 1;
         break;
     case FDI_RET:
     case FDI_ENTER:
     case FDI_LEAVE:
-        if (FD_OPSIZE(instr) == 2)
+        if (FD_OPSIZELG(instr) == 1)
             sizesuffix[0] = 'w', sizesuffixlen = 1;
         break;
     case FDI_LODS:
@@ -232,9 +281,9 @@ fd_mnemonic(char buf[], const FdInstr* instr) {
             buf = fd_strpcat(buf, fd_stre("rep "));
         if (FD_HAS_REPNZ(instr))
             buf = fd_strpcat(buf, fd_stre("repnz "));
-        if (FD_IS64(instr) && FD_ADDRSIZE(instr) == 4)
+        if (FD_IS64(instr) && FD_ADDRSIZELG(instr) == 2)
             buf = fd_strpcat(buf, fd_stre("addr32 "));
-        if (!FD_IS64(instr) && FD_ADDRSIZE(instr) == 2)
+        if (!FD_IS64(instr) && FD_ADDRSIZELG(instr) == 1)
             buf = fd_strpcat(buf, fd_stre("addr16 "));
         // FALLTHROUGH
     case FDI_PUSHA:
@@ -245,13 +294,8 @@ fd_mnemonic(char buf[], const FdInstr* instr) {
     case FDI_IRET:
     case FDI_IN:
     case FDI_OUT:
-        switch (FD_OPSIZE(instr)) {
-        default: break;
-        case 1: sizesuffix[0] = 'b'; sizesuffixlen = 1; break;
-        case 2: sizesuffix[0] = 'w'; sizesuffixlen = 1; break;
-        case 4: sizesuffix[0] = 'd'; sizesuffixlen = 1; break;
-        case 8: sizesuffix[0] = 'q'; sizesuffixlen = 1; break;
-        }
+        sizesuffix[0] = "bwdq"[FD_OPSIZELG(instr)];
+        sizesuffixlen = 1;
         break;
     default: break;
     }
@@ -281,7 +325,7 @@ fd_mnemonic(char buf[], const FdInstr* instr) {
 }
 
 static char*
-fd_format_impl(char buf[], const FdInstr* instr, uint64_t addr) {
+fd_format_impl(char buf[DECLARE_RESTRICTED_ARRAY_SIZE(128)], const FdInstr* instr, uint64_t addr) {
     buf = fd_mnemonic(buf, instr);
 
     for (int i = 0; i < 4; i++)
@@ -293,18 +337,18 @@ fd_format_impl(char buf[], const FdInstr* instr, uint64_t addr) {
             *buf++ = ',';
         *buf++ = ' ';
 
-        unsigned size = FD_OP_SIZE(instr, i);
+        int size = FD_OP_SIZELG(instr, i);
 
         if (op_type == FD_OT_REG) {
             unsigned type = FD_OP_REG_TYPE(instr, i);
             unsigned idx = FD_OP_REG(instr, i);
             buf = fd_strpcatreg(buf, type, idx, size);
-        } else if (op_type == FD_OT_MEM) {
+        } else if (op_type == FD_OT_MEM || op_type == FD_OT_MEMBCST) {
             unsigned idx_rt = FD_RT_GPL;
-            unsigned idx_sz = FD_ADDRSIZE(instr);
+            unsigned idx_sz = FD_ADDRSIZELG(instr);
             switch (FD_TYPE(instr)) {
-            case FDI_CMPXCHGD: size = 2 * FD_OPSIZE(instr); break;
-            case FDI_BOUND: size = 2 * size; break;
+            case FDI_CMPXCHGD: size = FD_OPSIZELG(instr) + 1; break;
+            case FDI_BOUND: size += 1; break;
             case FDI_JMPF:
             case FDI_CALLF:
             case FDI_LDS:
@@ -312,51 +356,75 @@ fd_format_impl(char buf[], const FdInstr* instr, uint64_t addr) {
             case FDI_LFS:
             case FDI_LGS:
             case FDI_LSS:
-                size += 2;
+                size += 6;
                 break;
             case FDI_FLD:
             case FDI_FSTP:
             case FDI_FBLD:
             case FDI_FBSTP:
-                size = size != 0 ? size : 10;
+                size = size >= 0 ? size : 9;
                 break;
             case FDI_VPGATHERQD:
             case FDI_VGATHERQPS:
+            case FDI_EVX_PGATHERQD:
+            case FDI_EVX_GATHERQPS:
                 idx_rt = FD_RT_VEC;
-                idx_sz = FD_OP_SIZE(instr, 0) * 2;
+                idx_sz = FD_OP_SIZELG(instr, 0) + 1;
+                break;
+            case FDI_EVX_PSCATTERQD:
+            case FDI_EVX_SCATTERQPS:
+                idx_rt = FD_RT_VEC;
+                idx_sz = FD_OP_SIZELG(instr, 1) + 1;
                 break;
             case FDI_VPGATHERDQ:
             case FDI_VGATHERDPD:
+            case FDI_EVX_PGATHERDQ:
+            case FDI_EVX_GATHERDPD:
                 idx_rt = FD_RT_VEC;
-                idx_sz = FD_OP_SIZE(instr, 0) / 2;
+                idx_sz = FD_OP_SIZELG(instr, 0) - 1;
+                break;
+            case FDI_EVX_PSCATTERDQ:
+            case FDI_EVX_SCATTERDPD:
+                idx_rt = FD_RT_VEC;
+                idx_sz = FD_OP_SIZELG(instr, 1) - 1;
                 break;
             case FDI_VPGATHERDD:
             case FDI_VPGATHERQQ:
             case FDI_VGATHERDPS:
             case FDI_VGATHERQPD:
+            case FDI_EVX_PGATHERDD:
+            case FDI_EVX_PGATHERQQ:
+            case FDI_EVX_GATHERDPS:
+            case FDI_EVX_GATHERQPD:
                 idx_rt = FD_RT_VEC;
-                idx_sz = FD_OP_SIZE(instr, 0);
+                idx_sz = FD_OP_SIZELG(instr, 0);
+                break;
+            case FDI_EVX_PSCATTERDD:
+            case FDI_EVX_PSCATTERQQ:
+            case FDI_EVX_SCATTERDPS:
+            case FDI_EVX_SCATTERQPD:
+                idx_rt = FD_RT_VEC;
+                idx_sz = FD_OP_SIZELG(instr, 1);
                 break;
             default: break;
             }
 
-            // 0=0h,1=1h,2=2h,4=5h,6=7h,8=bh,10=9h,16=6h,32=ch,64=8h
-            unsigned ptrszidx = (size ^ (size >> 2) ^ (size >> 3)) & 0xf;
+            if (op_type == FD_OT_MEMBCST)
+                size = FD_OP_BCSTSZLG(instr, i);
+
             const char* ptrsizes =
-                "\00               "  // 0x0
-                "\11byte ptr       "  // 0x1
-                "\11word ptr       "  // 0x2
-                "\00               "  // 0x3
-                "\00               "  // 0x4
-                "\12dword ptr      "  // 0x5
-                "\14xmmword ptr    "  // 0x6
-                "\12fword ptr      "  // 0x7
-                "\14zmmword ptr    "  // 0x8
-                "\12tbyte ptr      "  // 0x9
-                "\00               "  // 0xa
-                "\12qword ptr      "  // 0xb
-                "\14ymmword ptr    "; // 0xc
-            const char* ptrsize = ptrsizes + 16 * ptrszidx;
+                "\00               "
+                "\11byte ptr       "
+                "\11word ptr       "
+                "\12dword ptr      "
+                "\12qword ptr      "
+                "\14xmmword ptr    "
+                "\14ymmword ptr    "
+                "\14zmmword ptr    "
+                "\12dword ptr      "  // far ptr; word + 2
+                "\12fword ptr      "  // far ptr; dword + 2
+                "\12tbyte ptr      "; // far ptr/FPU; qword + 2
+            const char* ptrsize = ptrsizes + 16 * (size + 1);
             buf = fd_strpcat(buf, (struct FdStr) { ptrsize+1, *ptrsize });
 
             unsigned seg = FD_SEGMENT(instr);
@@ -370,7 +438,7 @@ fd_format_impl(char buf[], const FdInstr* instr, uint64_t addr) {
             bool has_base = FD_OP_BASE(instr, i) != FD_REG_NONE;
             bool has_idx = FD_OP_INDEX(instr, i) != FD_REG_NONE;
             if (has_base)
-                buf = fd_strpcatreg(buf, FD_RT_GPL, FD_OP_BASE(instr, i), FD_ADDRSIZE(instr));
+                buf = fd_strpcatreg(buf, FD_RT_GPL, FD_OP_BASE(instr, i), FD_ADDRSIZELG(instr));
             if (has_idx) {
                 if (has_base)
                     *buf++ = '+';
@@ -384,51 +452,75 @@ fd_format_impl(char buf[], const FdInstr* instr, uint64_t addr) {
                 if ((int64_t) disp < 0)
                     disp = -disp;
             }
-            if (FD_ADDRSIZE(instr) == 2)
+            if (FD_ADDRSIZELG(instr) == 1)
                 disp &= 0xffff;
-            else if (FD_ADDRSIZE(instr) == 4)
+            else if (FD_ADDRSIZELG(instr) == 2)
                 disp &= 0xffffffff;
             if (disp || (!has_base && !has_idx))
                 buf = fd_strpcatnum(buf, disp);
             *buf++ = ']';
+
+            if (UNLIKELY(op_type == FD_OT_MEMBCST)) {
+                // {1toX}, X = FD_OP_SIZE(instr, i) / BCSTSZ (=> 2/4/8/16/32)
+                unsigned bcstszidx = FD_OP_SIZELG(instr, i) - FD_OP_BCSTSZLG(instr, i) - 1;
+                const char* bcstsizes = "\6{1to2} \6{1to4} \6{1to8} \7{1to16}\7{1to32}         ";
+                const char* bcstsize = bcstsizes + bcstszidx * 8;
+                buf = fd_strpcat(buf, (struct FdStr) { bcstsize+1, *bcstsize });
+            }
         } else if (op_type == FD_OT_IMM || op_type == FD_OT_OFF) {
             size_t immediate = FD_OP_IMM(instr, i);
             // Some instructions have actually two immediate operands which are
             // decoded as a single operand. Split them here appropriately.
-            size_t splitimm = 0;
-            const char* splitsep = ", ";
             switch (FD_TYPE(instr)) {
             default:
                 goto nosplitimm;
             case FDI_SSE_EXTRQ:
             case FDI_SSE_INSERTQ:
-                splitimm = immediate & 0xff;
+                buf = fd_strpcatnum(buf, immediate & 0xff);
+                buf = fd_strpcat(buf, fd_stre(", "));
                 immediate = (immediate >> 8) & 0xff;
                 break;
             case FDI_ENTER:
-                splitimm = immediate & 0xffff;
+                buf = fd_strpcatnum(buf, immediate & 0xffff);
+                buf = fd_strpcat(buf, fd_stre(", "));
                 immediate = (immediate >> 16) & 0xff;
                 break;
             case FDI_JMPF:
             case FDI_CALLF:
-                splitsep = ":";
-                splitimm = (immediate >> 8*size) & 0xffff;
+                buf = fd_strpcatnum(buf, (immediate >> (8 << size)) & 0xffff);
+                *buf++ = ':';
                 // immediate is masked below.
                 break;
             }
-            buf = fd_strpcatnum(buf, splitimm);
-            buf = fd_strplcpy(buf, splitsep, 4);
 
         nosplitimm:
             if (op_type == FD_OT_OFF)
                 immediate += addr + FD_SIZE(instr);
-            if (size == 1)
+            if (size == 0)
                 immediate &= 0xff;
-            else if (size == 2)
+            else if (size == 1)
                 immediate &= 0xffff;
-            else if (size == 4)
+            else if (size == 2)
                 immediate &= 0xffffffff;
             buf = fd_strpcatnum(buf, immediate);
+        }
+
+        if (i == 0 && FD_MASKREG(instr)) {
+            *buf++ = '{';
+            buf = fd_strpcatreg(buf, FD_RT_MASK, FD_MASKREG(instr), 0);
+            *buf++ = '}';
+            if (FD_MASKZERO(instr))
+                buf = fd_strpcat(buf, fd_stre("{z}"));
+        }
+    }
+    if (UNLIKELY(FD_ROUNDCONTROL(instr) != FD_RC_MXCSR)) {
+        switch (FD_ROUNDCONTROL(instr)) {
+        case FD_RC_RN: buf = fd_strpcat(buf, fd_stre(", {rn-sae}")); break;
+        case FD_RC_RD: buf = fd_strpcat(buf, fd_stre(", {rd-sae}")); break;
+        case FD_RC_RU: buf = fd_strpcat(buf, fd_stre(", {ru-sae}")); break;
+        case FD_RC_RZ: buf = fd_strpcat(buf, fd_stre(", {rz-sae}")); break;
+        case FD_RC_SAE: buf = fd_strpcat(buf, fd_stre(", {sae}")); break;
+        default: break; // should not happen
         }
     }
     *buf++ = '\0';

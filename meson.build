@@ -1,12 +1,12 @@
 project('fadec', ['c'], default_options: ['warning_level=3', 'c_std=c11'],
-        meson_version: '>=0.40')
+        meson_version: '>=0.49')
 
 python3 = find_program('python3')
 
 # Check Python version
-# py_version_res = run_command(python3, ['--version'])
+# py_version_res = run_command(python3, ['--version'], check: true)
 # py_version = py_version_res.stdout().split(' ')[1]
-# if py_version_res.returncode() != 0 or not py_version.version_compare('>=3.6')
+# if not py_version.version_compare('>=3.6')
 #   error('Python 3.6 required, got @0@'.format(py_version))
 # endif
 
@@ -51,6 +51,22 @@ if get_option('with_encode2')
   sources += files('encode2.c')
 endif
 
+if cc.get_argument_syntax() == 'msvc'
+  # Disable some warnings to align warnings with GCC and Clang:
+  add_project_arguments('-D_CRT_SECURE_NO_WARNINGS',
+                        '/wd4018', # - Signed/unsigned comparison
+                        '/wd4146', # - Unary minus operator applied to unsigned
+                                   #   type, result still unsigned
+                        '/wd4244', # - Possible loss of data in conversion
+                                   #   from integer type to smaller integer type
+                        '/wd4245', # - Signed/unsigned assignment
+                        '/wd4267', # - Possible loss of data in conversion
+                                   #   from size_t to smaller type
+                        '/wd4310', # - Possible loss of data in conversion
+                                   #   of constant value to smaller type
+                        language: 'c')
+endif
+
 generate_args = []
 if get_option('archmode') != 'only64'
   generate_args += ['--32']
@@ -60,6 +76,9 @@ if get_option('archmode') != 'only32'
 endif
 if get_option('with_undoc')
   generate_args += ['--with-undoc']
+endif
+if not meson.is_subproject()
+  generate_args += ['--stats']
 endif
 
 tables = []

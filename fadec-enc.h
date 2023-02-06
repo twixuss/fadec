@@ -18,6 +18,7 @@ typedef enum {
     FE_MM0 = 0x500, FE_MM1, FE_MM2, FE_MM3, FE_MM4, FE_MM5, FE_MM6, FE_MM7,
     FE_XMM0 = 0x600, FE_XMM1, FE_XMM2, FE_XMM3, FE_XMM4, FE_XMM5, FE_XMM6, FE_XMM7,
     FE_XMM8, FE_XMM9, FE_XMM10, FE_XMM11, FE_XMM12, FE_XMM13, FE_XMM14, FE_XMM15,
+    FE_K0 = 0x700, FE_K1, FE_K2, FE_K3, FE_K4, FE_K5, FE_K6, FE_K7,
 } FeReg;
 
 typedef int64_t FeOp;
@@ -32,25 +33,20 @@ typedef int64_t FeOp;
 
 /** Add segment override prefix. This may or may not generate prefixes for the
  * ignored prefixes ES/CS/DS/SS in 64-bit mode. **/
-#define FE_SEG(seg) ((((seg) & 0x7) + 1) << 16)
+#define FE_SEG(seg) ((uint64_t) (((seg) & 0x7) + 1) << 29)
 /** Do not use. **/
-#define FE_SEG_MASK 0x70000
+#define FE_SEG_MASK 0xe0000000
 /** Overrides address size. **/
-#define FE_ADDR32 0x80000
+#define FE_ADDR32 0x10000000
 /** Used together with a RIP-relative (conditional) jump, this will force the
  * use of the encoding with the largest distance. Useful for reserving a jump
  * when the target offset is still unknown; if the jump is re-encoded later on,
  * FE_JMPL must be specified there, too, so that the encoding lengths match. **/
-#define FE_JMPL 0x100000
-/** Do not use. **/
-#define FE_MNEM_MASK 0xffff
+#define FE_JMPL 0x100000000
+#define FE_MASK(kreg) ((uint64_t) ((kreg) & 0x7) << 33)
+#define FE_MASKZ(kreg) ((uint64_t) ((kreg) & 0x7) << 33 | 0x1000000000)
 
-enum {
-#define FE_MNEMONIC(name,value) name = value,
 #include <fadec-encode-public.inc>
-#undef FE_MNEMONIC
-    FE_MNEM_MAX
-};
 
 /** Do not use. **/
 #define fe_enc64_1(buf, mnem, op0, op1, op2, op3, ...) fe_enc64_impl(buf, mnem, op0, op1, op2, op3)
