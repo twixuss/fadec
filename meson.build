@@ -4,11 +4,11 @@ project('fadec', ['c'], default_options: ['warning_level=3', 'c_std=c11'],
 python3 = find_program('python3')
 
 # Check Python version
-py_version_res = run_command(python3, ['--version'])
-py_version = py_version_res.stdout().split(' ')[1]
-if py_version_res.returncode() != 0 or not py_version.version_compare('>=3.6')
-  error('Python 3.6 required, got @0@'.format(py_version))
-endif
+# py_version_res = run_command(python3, ['--version'])
+# py_version = py_version_res.stdout().split(' ')[1]
+# if py_version_res.returncode() != 0 or not py_version.version_compare('>=3.6')
+#   error('Python 3.6 required, got @0@'.format(py_version))
+# endif
 
 cc = meson.get_compiler('c')
 if cc.has_argument('-fstrict-aliasing')
@@ -35,11 +35,11 @@ sources = []
 headers = []
 components = []
 
-if get_option('with_decode')
-  components += 'decode'
-  headers += files('fadec.h')
-  sources += files('decode.c', 'format.c')
-endif
+# if get_option('with_decode')
+#   components += 'decode'
+#   headers += files('fadec.h')
+#   sources += files('decode.c', 'format.c')
+# endif
 if get_option('with_encode')
   components += 'encode'
   headers += files('fadec-enc.h')

@@ -108,7 +108,7 @@ namespace {
         return FE_GPLH(reg.idx);
     }
     static constexpr inline FeRegGPLH FE_MAKE_GPLH(FeRegGPH reg) {
-        return FE_GPLH(reg.idx + 0x20);
+        return FE_GPLH((unsigned char)(reg.idx + 0x20));
     }
 }
 extern "C" {

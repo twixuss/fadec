@@ -44,7 +44,7 @@ fd_clz64(uint64_t v) {
 #endif
 
 static char*
-fd_strpcatnum(char dst[static 18], uint64_t val) {
+fd_strpcatnum(char dst[], uint64_t val) {
     unsigned lz = fd_clz64(val|1);
     unsigned numbytes = 16 - (lz / 4);
 #if defined(__SSE2__)
@@ -132,7 +132,7 @@ fdi_name(FdInstrType ty) {
 }
 
 static char*
-fd_mnemonic(char buf[restrict static 48], const FdInstr* instr) {
+fd_mnemonic(char buf[], const FdInstr* instr) {
 #define FD_DECODE_TABLE_STRTAB1
     static const char* mnemonic_str =
 #include <fadec-decode-private.inc>
@@ -281,7 +281,7 @@ fd_mnemonic(char buf[restrict static 48], const FdInstr* instr) {
 }
 
 static char*
-fd_format_impl(char buf[restrict static 128], const FdInstr* instr, uint64_t addr) {
+fd_format_impl(char buf[], const FdInstr* instr, uint64_t addr) {
     buf = fd_mnemonic(buf, instr);
 
     for (int i = 0; i < 4; i++)
